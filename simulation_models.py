@@ -20,8 +20,11 @@ class PVBattBasic:
     load_profile: list
     grid_profile: list
 
+    peak_demand: float  #kW ac
+
     # System parameters
     hybrid_system: bool    #T/F, False: off-grid
+    cycle_battery: bool    #T/F, True: use battery to supply load if battery is high
     batt_ch_rating: float   #kW dc
     batt_dc_rating: float    #kW dc
     inv_rating: float        #kW ac, output
@@ -60,7 +63,6 @@ class PVBattBasic:
 
         # Error limit for zero-sum checks
         self.max_error = 0.00000001
-
 
     def simulate(self):
         # Initialise output array
@@ -136,7 +138,7 @@ class PVBattBasic:
         # Load balance, at load, kW ac
         load_from_solar = solar_for_load*self.e_pv*self.e_inv
         load_from_batt_initial = min(-batt_dc_max,
-                                     load - load_from_solar)*batt_high
+                                     load - load_from_solar)*batt_high*self.cycle_battery
         load_from_grid = min(grid_import_max, 
                              load - load_from_batt_initial - load_from_solar)
         load_from_batt = load - load_from_grid - load_from_solar
@@ -471,7 +473,41 @@ class PVBattBasic:
             }
         )
         return data
-    
+
+    def calc_day_backup(self, day):
+        # Incrementally increase hours and check backup
+        hrs_backup_min = 4
+        hrs_backup_max = 18
+
+        for i in range(hrs_backup_max - hrs_backup_min):
+            hrs_backup = hrs_backup_min + i
+
+            hrs_start = 12 - math.floor(hrs_backup/2)
+            hrs_end = 12 + math.ceil(hrs_backup/2)
+
+            datetime_from = day + datetime.timedelta(hours = hrs_start)
+            datetime_to = day + datetime.timedelta(hours = hrs_end)
+            df = self.output_df[ (self.output_df['datetime']>=datetime_from) & (self.output_df['datetime']<datetime_to) ]
+
+            load = hrs_backup * self.peak_demand
+            solar = df['solar'].sum() + df['solar_wasted'].sum()
+            batt = self.batt_capacity
+            spare_capacity = solar + batt - load
+
+            if spare_capacity < 0:
+                # insufficient backup, roll back by 1 and exit
+                hrs_backup -= 1
+                break
+        
+        return hrs_backup
+
+
+
+
+
+
+
+
 @attr.s(auto_attribs=True)
 class CostBasic:
     # Read only parameters
@@ -708,14 +744,17 @@ class Simulations:
         for i in range(len(self.simulation_inputs)):
             self.simulation_outputs[i] = self.run_simulation(inputs = self.simulation_inputs[i])
 
-
     def run_simulation(self, inputs):
         # Inputs
         annual_demand_kWh = inputs['annual_demand_kWh']
-        input_profiles = pd.read_csv(inputs['input_profiles_path'])
         pv_to_load_ratio = inputs['pv_to_load_ratio']
         hybrid_system = inputs['hybrid_system']
         peak_demand_backup_hrs = inputs['peak_demand_backup_hrs']
+
+        if hybrid_system:
+            cycle_battery = False
+        else:
+            cycle_battery = True
 
         # Constants
         battery_min_c_rate = 5
@@ -731,20 +770,20 @@ class Simulations:
         e_bdc = 0.95
 
         # Scale load profile
-        load_profile_input = input_profiles['load'].tolist()
+        load_profile_input = inputs['load_profile']
         load_scalar = annual_demand_kWh / sum(load_profile_input)
         load_profile = [i* load_scalar for i in load_profile_input]
 
         # Scale solar profile
         solar_target_generation = annual_demand_kWh * pv_to_load_ratio
-        solar_profile_input = input_profiles['solar'].tolist()
+        solar_profile_input = inputs['solar_profile']
         solar_scalar = solar_target_generation / sum(solar_profile_input)
         solar_profile = [i* solar_scalar for i in solar_profile_input]
         solar_capacity = sum(solar_profile)/1607.8
         print('to fix for non-mysore projects')
 
         # Extract grid profile
-        grid_profile = input_profiles['grid'].tolist()
+        grid_profile = inputs['grid_profile']
 
         # Size battery
         peak_demand = max(load_profile)
@@ -764,8 +803,11 @@ class Simulations:
             load_profile = load_profile,
             grid_profile = grid_profile,
 
+            peak_demand = peak_demand,
+
             # System specs
             hybrid_system = hybrid_system,   #T/F, False: off-grid
+            cycle_battery = cycle_battery,
             batt_ch_rating = batt_ch_rating,     #kW dc
             batt_dc_rating = batt_dc_rating,   #kW dc
             inv_rating = inv_rating,       #kW ac, output
@@ -793,6 +835,19 @@ class Simulations:
         monthly_data = les.output_df.groupby(pd.Grouper(key='datetime', freq='M')).sum()
         monthly_data['datetime'] = monthly_data.index
 
+        # Calculate minimum day time backup provided
+        start_date = les.output_df['datetime'].min()
+        end_date = les.output_df['datetime'].max()
+        diff = end_date - start_date
+        days_diff = diff.days + 1
+        day_time_backup = [None] * days_diff
+
+        for i in range(len(day_time_backup)):
+            day = start_date + datetime.timedelta(days = i)
+            day_time_backup[i] = les.calc_day_backup(day)
+               
+        les.day_time_backup_min = min(day_time_backup)
+
         ### Costs ###
 
         # Get monthly_grid_consumption for 
@@ -805,6 +860,11 @@ class Simulations:
             'inv_kW': inv_rating,
         }
         
+        if les.hybrid_system:
+            cost_inv = 20000 #INR/kWpk
+        else:
+            cost_inv = 15000 #INR/kWpk
+
         cost = CostBasic(
             # Financial parameters
             project_years = 25,   #Total number of years for the project
@@ -813,7 +873,7 @@ class Simulations:
             # Cost inputs
             cost_pv = 27000,    #INR/kWpk
             cost_batt = 7000,   #INR/kWh
-            cost_inv = 15000,   #INR/kWpk
+            cost_inv = cost_inv,   #INR/kWpk
 
             # Markup inputs
             markup_bos = 0.1,       #% markup on CAPEX above
@@ -895,7 +955,7 @@ class Simulations:
             'cost_grid_total', 'cost_import_kWh', 'cost_export_kWh', 'cost_import_kW', 'cost_export_kW', 
             'cost_opex_yr1', 'cost_repex_total', 'cost_npv',
             'an_load', 'an_solar', 'an_solar_wasted', 'an_grid', 'an_losses',
-            'an_batt_ch', 'an_batt_dc', 
+            'an_batt_ch', 'an_batt_dc', 'batt_day_backup_hrs',
             'an_grid_import_kWh', 'an_grid_export_kWh', 'an_grid_import_kW', 'an_grid_export_kW',
             ]
         data = [None] * len(self.simulation_outputs)
@@ -903,8 +963,7 @@ class Simulations:
         # Get data to output from each simulation
         for i in range(len(self.simulation_outputs)):
             # Get data from simulation outputs
-            sim = self.simulation_outputs[i]['hourly_simulation']
-            monthly_data = self.simulation_outputs[i]['monthly_data']
+            les = self.simulation_outputs[i]['hourly_simulation']
             cost = self.simulation_outputs[i]['costs']
 
             # Data we want
@@ -929,20 +988,21 @@ class Simulations:
             cost_npv = cost.npv
 
             # Annual energy
-            an_load = sum(sim.output_df['load'])
-            an_solar = sum(sim.output_df['solar'])
-            an_solar_wasted = sum(sim.output_df['solar_wasted'])
-            an_grid = sum(sim.output_df['grid'])
-            an_losses = sum(sim.output_df['loss_total'])
+            an_load = sum(les.output_df['load'])
+            an_solar = sum(les.output_df['solar'])
+            an_solar_wasted = sum(les.output_df['solar_wasted'])
+            an_grid = sum(les.output_df['grid'])
+            an_losses = sum(les.output_df['loss_total'])
             
-            an_batt_ch = sim.output_df[sim.output_df.batt_internal.gt(0)]['batt_internal'].sum()
-            an_batt_dc = sim.output_df[sim.output_df.batt_internal.lt(0)]['batt_internal'].sum()
+            an_batt_ch = les.output_df[les.output_df.batt_internal.gt(0)]['batt_internal'].sum()
+            an_batt_dc = les.output_df[les.output_df.batt_internal.lt(0)]['batt_internal'].sum()
             
             an_grid_import_kWh = cost.annual_grid_volumes['energy_import']
             an_grid_export_kWh = cost.annual_grid_volumes['energy_export']
             an_grid_import_kW = cost.annual_grid_volumes['demand_import']
             an_grid_export_kW = cost.annual_grid_volumes['demand_export']
             
+            batt_day_backup_hrs = les.day_time_backup_min
 
             # Make sure this matches "columns" defined above
             data[i] = [
@@ -951,7 +1011,7 @@ class Simulations:
                 cost_grid_total, cost_import_kWh, cost_export_kWh, cost_import_kW, cost_export_kW,
                 cost_opex_yr1, cost_repex_total, cost_npv,
                 an_load, an_solar, an_solar_wasted, an_grid, an_losses,
-                an_batt_ch, an_batt_dc, 
+                an_batt_ch, an_batt_dc, batt_day_backup_hrs,
                 an_grid_import_kWh, an_grid_export_kWh, an_grid_import_kW, an_grid_export_kW,
             ]
 
@@ -959,7 +1019,6 @@ class Simulations:
         self.output_table = pd.DataFrame(data, columns=columns)
         
         self.output_table.to_csv(root_folder + '/output_table.csv')
-
     
     def create_graphs(self, root_folder, export_png, export_html):
         # Plot day profile       
@@ -969,7 +1028,7 @@ class Simulations:
             simulation = self.simulation_outputs[i]
 
             datetime_from = datetime.datetime(2023,7,1,0,0,0)
-            datetime_to = datetime.datetime(2023,7,1,23,0,0)
+            datetime_to = datetime.datetime(2023,7,2,0,0,0)
             les = simulation['hourly_simulation']
 
             output_path = root_folder +'/' + 'sim' + str(i) +'/'
@@ -1001,7 +1060,7 @@ class Simulations:
             # Plot monthly data
 
             datetime_from = datetime.datetime(2023,1,1,0,0,0)
-            datetime_to = datetime.datetime(2023,12,31,23,0,0)
+            datetime_to = datetime.datetime(2024,1,1,0,0,0)
 
             monthly_data = simulation['monthly_data']
 

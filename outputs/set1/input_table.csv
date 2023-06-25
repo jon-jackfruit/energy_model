@@ -1,4 +1,0 @@
-,annual_demand_kWh,input_profiles_path,pv_to_load_ratio,hybrid_system,peak_demand_backup_hrs
-0,10000,profiles.csv,1.2,False,4
-1,10000,profiles.csv,2.0,True,4
-2,10000,profiles.csv,3.0,False,4
