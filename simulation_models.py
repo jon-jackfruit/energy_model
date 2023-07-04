@@ -69,7 +69,7 @@ class PVBattBasic:
        
         batt_soc = self.soc_start
         output_arr = []
-
+        
         for i in range(self.num_steps):
             # Get inputs for the time step
             solar_input = self.solar_profile[i]   #kW dc
@@ -120,10 +120,16 @@ class PVBattBasic:
                 grid_export_max = 0 
                 grid_import_max = self.grid_import_rating
                 inverter_on = False
-            else:
+            elif grid_on and batt_high:
+                grid_export_max = 0
+                grid_import_max = self.grid_import_rating
+                inverter_on = True*self.cycle_battery
+            elif not(grid_on):
                 grid_export_max = 0 
                 grid_import_max = 0
                 inverter_on = True
+            else:
+                raise Warning('grid_on or batt_high control logic error')
 
         # Solar balance, at solar_input, kW dc
         solar_for_load = min(load/self.e_inv/self.e_pv,
@@ -142,6 +148,7 @@ class PVBattBasic:
         load_from_grid = min(grid_import_max, 
                              load - load_from_batt_initial - load_from_solar)
         load_from_batt = load - load_from_grid - load_from_solar
+
 
         # Battery balance, at battery input, kW dc
         # Charging
@@ -255,7 +262,7 @@ class PVBattBasic:
                     x=df_graph['datetime'],
                     y=df_graph['load_from_solar'],
                     offsetgroup=0,
-                    marker_color='#D75602',
+                    marker_color='#d75602',
                 ),
                 go.Bar(
                     name='Battery to load',
@@ -263,7 +270,7 @@ class PVBattBasic:
                     y=df_graph['load_from_batt'],
                     offsetgroup=0,
                     base=df_graph['load_from_solar'],
-                    marker_color='#9ABCA7',
+                    marker_color='#9abca7',
                 ),
                 go.Bar(
                     name='Grid to load',
@@ -277,11 +284,12 @@ class PVBattBasic:
                     name='Load',
                     x=df_graph['datetime'],
                     y=df_graph['load'],
-                    marker_color='#30441E',
+                    marker_color='#fec22f',
                 )
             ]
         )
-        fig.update_yaxes(title_text="Power (kW)")
+        fig.update_yaxes(title_text="Energy (kWh)")
+        fig.update_layout(legend=dict(orientation="h"))
         return fig
 
     def graph_solar(self, df, datetime_from, datetime_to):
@@ -298,7 +306,7 @@ class PVBattBasic:
                     x=df_graph['datetime'],
                     y=df_graph['solar_for_load'],
                     offsetgroup=0,
-                    marker_color='#D75602',
+                    marker_color='#fec22f',
                 ),
                 go.Bar(
                     name='PV to battery',
@@ -306,7 +314,7 @@ class PVBattBasic:
                     y=df_graph['solar_for_batt'],
                     offsetgroup=0,
                     base=df_graph['solar_for_load'],
-                    marker_color='#9ABCA7',
+                    marker_color='#9abca7',
                 ),
                 go.Bar(
                     name='PV to grid',
@@ -322,19 +330,19 @@ class PVBattBasic:
                     y=df_graph['graph_solar_wasted'],
                     offsetgroup=0,
                     base=df_graph['graph_solar_for_grid_base'],
-                    marker_color='#ffdba1',
-                    marker_pattern_shape="."
+                    marker_color='#f9cb9c'
                 ),
 
                 go.Scatter(
                     name='PV',
                     x=df_graph['datetime'],
                     y=df_graph['solar'],
-                    marker_color='#30441E',
+                    marker_color='#d75602',
                 )
             ]
         )
-        fig.update_yaxes(title_text="Power (kW)")
+        fig.update_yaxes(title_text="Energy (kWh)")
+        fig.update_layout(legend=dict(orientation="h"))
         return fig
 
     def graph_batt(self, df, datetime_from, datetime_to):
@@ -350,18 +358,18 @@ class PVBattBasic:
                 x=df_graph['datetime'],
                 y=df_graph['load_from_batt_inverse'],
                 offsetgroup=0,
-                marker_color='#9ABCA7',
+                marker_color='#fec22f',
             ),
             secondary_y=False
         )
 
         fig.add_trace(
             go.Bar(
-                name='Battery from solar',
+                name='Battery from PV',
                 x=df_graph['datetime'],
                 y=df_graph['solar_for_batt'],
                 offsetgroup=0,
-                marker_color='#D75602',
+                marker_color='#d75602',
             ),
             secondary_y=False
         )
@@ -382,7 +390,7 @@ class PVBattBasic:
                 name='Battery power',
                 x=df_graph['datetime'],
                 y=df_graph['batt'],
-                marker_color='#30441E',
+                marker_color='#9abca7',
             ),
             secondary_y=False
         )        
@@ -399,9 +407,8 @@ class PVBattBasic:
         
         fig.update_layout(
             legend=dict(orientation="h"),
-            legend_yanchor = "top",
             yaxis=dict(
-                title=dict(text="Power (kW)"),
+                title=dict(text="Energy (kWh)"),
                 side="left",
                 range=[-10, 10],
                 dtick=2
@@ -428,7 +435,7 @@ class PVBattBasic:
                     x=df_graph['datetime'],
                     y=df_graph['grid_for_load'],
                     offsetgroup=0,
-                    marker_color='#D75602',
+                    marker_color='#fec22f',
                 ),
                 go.Bar(
                     name='Grid to battery',
@@ -436,24 +443,25 @@ class PVBattBasic:
                     y=df_graph['grid_for_batt'],
                     offsetgroup=0,
                     base=df_graph['grid_for_load'],
-                    marker_color='#9ABCA7',
+                    marker_color='#9abca7',
                 ),
                 go.Bar(
-                    name='Grid solar export',
+                    name='Grid from PV (export)',
                     x=df_graph['datetime'],
                     y=df_graph['grid_from_solar'],
                     offsetgroup=0,
-                    marker_color='#272635',
+                    marker_color='#d75602',
                 ),
                 go.Scatter(
                     name='Grid',
                     x=df_graph['datetime'],
                     y=df_graph['grid'],
-                    marker_color='#30441E',
+                    marker_color='#272635',
                 )
             ]
         )
-        fig.update_yaxes(title_text="Power (kW)")
+        fig.update_yaxes(title_text="Energy (kWh)")
+        fig.update_layout(legend=dict(orientation="h"))
         return fig
   
     def calc_monthly_grid_consumption(self):
@@ -675,18 +683,20 @@ class CostBasic:
             else:               # Calculating export costs (negative cost)
                 if net_metering:
                     volume = min(0,vol_import + vol_export)
+                    
                 else:
                     volume = vol_export
-            
             # Calculate the volume used and cost for each slab
             volume_by_slab = [None] * len(slabs)
             cost_by_slab = [None] * len(slabs)
 
-            volume_abs = abs(volume)       
+            volume_abs = abs(volume)     
+
             if volume != 0:
                 volume_sign = int(volume/volume_abs)   
             else:
                 volume_sign = 1
+            
              
             for i in range(len(slabs)):
                 slab = slabs[i]
@@ -699,8 +709,8 @@ class CostBasic:
                 slab_above_prev_slab = slab[0] - prev_slab[0]
                 
                 volume_by_slab[i] = max(0,min(volume_above_prev_slab, slab_above_prev_slab)) * volume_sign
-                cost_by_slab[i] = volume_by_slab[i] * slab[1] * volume_sign
-            
+                cost_by_slab[i] = volume_by_slab[i] * slab[1]
+
             # Save data in output array
             monthly_volume_by_slab[j] = volume_by_slab
             monthly_cost_by_slab[j] = cost_by_slab
@@ -749,18 +759,18 @@ class Simulations:
         annual_demand_kWh = inputs['annual_demand_kWh']
         pv_to_load_ratio = inputs['pv_to_load_ratio']
         hybrid_system = inputs['hybrid_system']
+        cycle_battery = inputs['cycle_battery']
         peak_demand_backup_hrs = inputs['peak_demand_backup_hrs']
-
-        if hybrid_system:
-            cycle_battery = False
-        else:
-            cycle_battery = True
+        export_tariff = inputs['export_tariff'] 
 
         # Constants
         battery_min_c_rate = 5
-        grid_export_rating = 1000   #kW ac
-        grid_import_rating = 1000   #kW ac
-        soc_low = 0.3          #%
+        grid_export_rating = 100000   #kW ac
+        grid_import_rating = 100000   #kW ac
+        if cycle_battery:
+            soc_low = 0.5          #%
+        else:
+            soc_low = 1
         soc_start = 0.5        #%
         # Efficiencies
         e_pv = 0.98
@@ -788,6 +798,7 @@ class Simulations:
         # Size battery
         peak_demand = max(load_profile)
         batt_capacity = math.ceil(peak_demand * peak_demand_backup_hrs)
+        print(batt_capacity)
         batt_ch_rating = math.ceil(batt_capacity/battery_min_c_rate)
         batt_dc_rating = -batt_ch_rating
 
@@ -899,7 +910,7 @@ class Simulations:
                 [100000000, 175],
             ],
             demand_export_slabs = [
-                [100000000, 50],   #[peak kW demand, Rs/kW cost]
+                [100000000, 0],   #[peak kW demand, Rs/kW cost]
             ],
 
             energy_import_slabs = [
@@ -909,7 +920,7 @@ class Simulations:
             ],
 
             energy_export_slabs = [
-                [100000000, 2], #[monthly kWh consumption, Rs/kWh cost]
+                [100000000, export_tariff], #[monthly kWh consumption, Rs/kWh cost]
             ],
 
             # REPEX inputs
@@ -1021,7 +1032,8 @@ class Simulations:
         self.output_table.to_csv(root_folder + '/output_table.csv')
     
     def create_graphs(self, root_folder, export_png, export_html):
-        # Plot day profile       
+        # Plot day profile
+        self.graphs = [None] * len(self.simulation_outputs)       
         for i in range(len(self.simulation_outputs)):
 
             #print('graphs for simulation ' + str(i))
@@ -1043,6 +1055,13 @@ class Simulations:
             fig2 = les.graph_solar(les.output_df, datetime_from=datetime_from, datetime_to=datetime_to)
             fig3 = les.graph_batt(les.output_df, datetime_from=datetime_from, datetime_to=datetime_to)
             fig4 = les.graph_grid(les.output_df, datetime_from=datetime_from, datetime_to=datetime_to)
+
+            graphs_day = {
+                'load': fig1,
+                'solar': fig2,
+                'batt': fig3,
+                'grid': fig4,
+            }
 
             if export_html:
                 #print('exporting html')
@@ -1068,6 +1087,14 @@ class Simulations:
             fig1 = les.graph_load(monthly_data, datetime_from=datetime_from, datetime_to=datetime_to)
             fig2 = les.graph_solar(monthly_data, datetime_from=datetime_from, datetime_to=datetime_to)
             fig3 = les.graph_grid(monthly_data, datetime_from=datetime_from, datetime_to=datetime_to)
+            fig4 = les.graph_batt(monthly_data, datetime_from=datetime_from, datetime_to=datetime_to)
+
+            graphs_month = {
+                'load': fig1,
+                'solar': fig2,
+                'grid': fig3,
+                'batt': fig4,
+            }
             
             if export_html:
                 #print('exporting html')
@@ -1079,4 +1106,9 @@ class Simulations:
                 fig1.write_image(output_path + "month_load.png", engine="kaleido")
                 fig2.write_image(output_path + "month_solar.png", engine="kaleido")
                 fig3.write_image(output_path + "month_grid.png", engine="kaleido")
+
+            self.graphs[i] = {
+                'day': graphs_day,
+                'month': graphs_month
+            }
 
